@@ -81,7 +81,7 @@ describe('JSON output', () => {
 
     expect(payload.error).toBeDefined();
     expect(payload.error.type).toBe('Error');
-    expect(payload.error.code).toBe(1);
+    expect(payload.error.code).toBe(41);
     expect(payload.error.message).toContain(
       "enforced authentication type is 'gemini-api-key'",
     );

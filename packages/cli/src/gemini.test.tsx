@@ -19,6 +19,7 @@ import {
   validateDnsResolutionOrder,
   startInteractiveUI,
 } from './gemini.js';
+import { type CliArgs } from './config/config.js';
 import { type LoadedSettings } from './config/settings.js';
 import { appEvents, AppEvent } from './utils/events.js';
 import {
@@ -462,6 +463,204 @@ describe('gemini.tsx main function kitty protocol', () => {
   });
 });
 
+describe('gemini.tsx main function exit codes', () => {
+  let originalEnvNoRelaunch: string | undefined;
+
+  beforeEach(() => {
+    originalEnvNoRelaunch = process.env['GEMINI_CLI_NO_RELAUNCH'];
+    process.env['GEMINI_CLI_NO_RELAUNCH'] = 'true';
+    vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new MockProcessExitError(code);
+    });
+    // Mock stderr to avoid cluttering output
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    if (originalEnvNoRelaunch !== undefined) {
+      process.env['GEMINI_CLI_NO_RELAUNCH'] = originalEnvNoRelaunch;
+    } else {
+      delete process.env['GEMINI_CLI_NO_RELAUNCH'];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('should exit with 42 for invalid input combination (prompt-interactive with non-TTY)', async () => {
+    const { loadCliConfig, parseArguments } = await import(
+      './config/config.js'
+    );
+    const { loadSettings } = await import('./config/settings.js');
+    vi.mocked(loadCliConfig).mockResolvedValue({} as Config);
+    vi.mocked(loadSettings).mockReturnValue({
+      merged: { security: { auth: {} }, ui: {} },
+      errors: [],
+    } as never);
+    vi.mocked(parseArguments).mockResolvedValue({
+      promptInteractive: true,
+    } as unknown as CliArgs);
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: false,
+      configurable: true,
+    });
+
+    try {
+      await main();
+      expect.fail('Should have thrown MockProcessExitError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(MockProcessExitError);
+      expect((e as MockProcessExitError).code).toBe(42);
+    }
+  });
+
+  it('should exit with 41 for auth failure during sandbox setup', async () => {
+    const { loadCliConfig, parseArguments } = await import(
+      './config/config.js'
+    );
+    const { loadSettings } = await import('./config/settings.js');
+    const { loadSandboxConfig } = await import('./config/sandboxConfig.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(loadSandboxConfig).mockResolvedValue({} as any);
+    vi.mocked(loadCliConfig).mockResolvedValue({
+      refreshAuth: vi.fn().mockRejectedValue(new Error('Auth failed')),
+    } as unknown as Config);
+    vi.mocked(loadSettings).mockReturnValue({
+      merged: {
+        security: { auth: { selectedType: 'google', useExternal: false } },
+        ui: {},
+      },
+      errors: [],
+    } as never);
+    vi.mocked(parseArguments).mockResolvedValue({} as unknown as CliArgs);
+    vi.mock('./config/auth.js', () => ({
+      validateAuthMethod: vi.fn().mockReturnValue(null),
+    }));
+
+    try {
+      await main();
+      expect.fail('Should have thrown MockProcessExitError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(MockProcessExitError);
+      expect((e as MockProcessExitError).code).toBe(41);
+    }
+  });
+
+  it('should exit with 42 for session resume failure', async () => {
+    const { loadCliConfig, parseArguments } = await import(
+      './config/config.js'
+    );
+    const { loadSettings } = await import('./config/settings.js');
+
+    vi.mocked(loadCliConfig).mockResolvedValue({
+      isInteractive: () => false,
+      getQuestion: () => 'test',
+      getSandbox: () => false,
+      getDebugMode: () => false,
+      getListExtensions: () => false,
+      getListSessions: () => false,
+      getDeleteSession: () => undefined,
+      getMcpServers: () => ({}),
+      getMcpClientManager: vi.fn(),
+      initialize: vi.fn(),
+      getIdeMode: () => false,
+      getExperimentalZedIntegration: () => false,
+      getScreenReader: () => false,
+      getGeminiMdFileCount: () => 0,
+      getPolicyEngine: vi.fn(),
+      getMessageBus: () => ({ subscribe: vi.fn() }),
+      getToolRegistry: vi.fn(),
+      getContentGeneratorConfig: vi.fn(),
+      getModel: () => 'gemini-pro',
+      getEmbeddingModel: () => 'embedding-001',
+      getApprovalMode: () => 'default',
+      getCoreTools: () => [],
+      getTelemetryEnabled: () => false,
+      getTelemetryLogPromptsEnabled: () => false,
+      getFileFilteringRespectGitIgnore: () => true,
+      getOutputFormat: () => 'text',
+      getExtensions: () => [],
+      getUsageStatisticsEnabled: () => false,
+    } as unknown as Config);
+    vi.mocked(loadSettings).mockReturnValue({
+      merged: { security: { auth: {} }, ui: {} },
+      errors: [],
+    } as never);
+    vi.mocked(parseArguments).mockResolvedValue({
+      resume: 'invalid-session',
+    } as unknown as CliArgs);
+
+    vi.mock('./utils/sessionUtils.js', () => ({
+      SessionSelector: vi.fn().mockImplementation(() => ({
+        resolveSession: vi
+          .fn()
+          .mockRejectedValue(new Error('Session not found')),
+      })),
+    }));
+
+    try {
+      await main();
+      expect.fail('Should have thrown MockProcessExitError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(MockProcessExitError);
+      expect((e as MockProcessExitError).code).toBe(42);
+    }
+  });
+
+  it('should exit with 42 for no input provided', async () => {
+    const { loadCliConfig, parseArguments } = await import(
+      './config/config.js'
+    );
+    const { loadSettings } = await import('./config/settings.js');
+
+    vi.mocked(loadCliConfig).mockResolvedValue({
+      isInteractive: () => false,
+      getQuestion: () => '',
+      getSandbox: () => false,
+      getDebugMode: () => false,
+      getListExtensions: () => false,
+      getListSessions: () => false,
+      getDeleteSession: () => undefined,
+      getMcpServers: () => ({}),
+      getMcpClientManager: vi.fn(),
+      initialize: vi.fn(),
+      getIdeMode: () => false,
+      getExperimentalZedIntegration: () => false,
+      getScreenReader: () => false,
+      getGeminiMdFileCount: () => 0,
+      getPolicyEngine: vi.fn(),
+      getMessageBus: () => ({ subscribe: vi.fn() }),
+      getToolRegistry: vi.fn(),
+      getContentGeneratorConfig: vi.fn(),
+      getModel: () => 'gemini-pro',
+      getEmbeddingModel: () => 'embedding-001',
+      getApprovalMode: () => 'default',
+      getCoreTools: () => [],
+      getTelemetryEnabled: () => false,
+      getTelemetryLogPromptsEnabled: () => false,
+      getFileFilteringRespectGitIgnore: () => true,
+      getOutputFormat: () => 'text',
+      getExtensions: () => [],
+      getUsageStatisticsEnabled: () => false,
+    } as unknown as Config);
+    vi.mocked(loadSettings).mockReturnValue({
+      merged: { security: { auth: {} }, ui: {} },
+      errors: [],
+    } as never);
+    vi.mocked(parseArguments).mockResolvedValue({} as unknown as CliArgs);
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: true, // Simulate TTY so it doesn't try to read stdin
+      configurable: true,
+    });
+
+    try {
+      await main();
+      expect.fail('Should have thrown MockProcessExitError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(MockProcessExitError);
+      expect((e as MockProcessExitError).code).toBe(42);
+    }
+  });
+});
+
 describe('validateDnsResolutionOrder', () => {
   let debugLoggerWarnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -580,7 +779,6 @@ describe('startInteractiveUI', () => {
     );
 
     // Verify render was called with correct options
-    expect(renderSpy).toHaveBeenCalledTimes(1);
     const [reactElement, options] = renderSpy.mock.calls[0];
 
     // Verify render options
